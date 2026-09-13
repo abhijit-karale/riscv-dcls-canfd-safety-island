@@ -1,0 +1,34 @@
+#=============================================================================
+# Simulation & Synthesis Build Artifacts
+#=============================================================================
+**/work/
+**/transcript
+**/tr_db.log
+**/*.wlf
+**/*.vcd
+**/*.log
+**/*.rpt
+**/*.qdb
+**/*.qpg
+**/*.qtl
+**/*.tfdb
+**/_info
+**/_vmake
+**/_lib*
+**/@_opt/
+**/_dpi/
+simv*
+csrc/
+INCA_libs/
+xcelium.d/
+**/jgproject/
+.simvision/
+
+# Operating System & IDE Artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*~
+.vscode/
+.idea/

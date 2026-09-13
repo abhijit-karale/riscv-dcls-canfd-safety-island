@@ -1,0 +1,206 @@
+//=============================================================================
+// File: dcls_assertions.sva
+// Description: Comprehensive SystemVerilog Assertions (SVA) for Formal
+//              Verification of Dual-Core Lockstep (DCLS), Safe-State Clamp,
+//              and Gray-Code Asynchronous CDC FIFOs.
+// Standard: IEEE 1800-2017 SystemVerilog / JasperGold Formal Proofs
+//=============================================================================
+
+`timescale 1ns/1ps
+
+import rv32i_pkg::*;
+
+//-----------------------------------------------------------------------------
+// SVA Checker 1: DCLS Lockstep Comparator & Alarm Latency
+//-----------------------------------------------------------------------------
+module dcls_comparator_sva (
+    input  wire                    clk,
+    input  wire                    rst_n,
+    input  wire                    s_rst_n,
+    input  wire core_monitor_t     m_monitor_aligned,
+    input  wire core_monitor_t     s_monitor,
+    input  wire                    mismatch_detected,
+    input  wire                    safe_state_alarm,
+    input  wire                    alarm_clear_n
+);
+
+    // Property 1: Immediate alarm assertion on mismatch detection (within 1 cycle)
+    property p_dcls_alarm_latency;
+        @(posedge clk) disable iff (!rst_n || !s_rst_n)
+        (mismatch_detected) |-> ##1 safe_state_alarm;
+    endproperty
+    assert_dcls_alarm_latency: assert property (p_dcls_alarm_latency)
+        else $error("[SVA FAIL] safe_state_alarm not asserted within 1 cycle of mismatch!");
+    cover_dcls_alarm_latency: cover property (p_dcls_alarm_latency);
+
+    // Property 2: Alarm stickiness - stays high until explicit synchronous clear
+    property p_dcls_alarm_sticky;
+        @(posedge clk) disable iff (!rst_n)
+        (safe_state_alarm && alarm_clear_n) |-> ##1 safe_state_alarm;
+    endproperty
+    assert_dcls_alarm_sticky: assert property (p_dcls_alarm_sticky)
+        else $error("[SVA FAIL] safe_state_alarm unexpectedly de-asserted without clear!");
+
+    // Property 3: PC Mismatch Detection
+    property p_pc_mismatch_triggers;
+        @(posedge clk) disable iff (!rst_n || !s_rst_n)
+        (m_monitor_aligned.valid && s_monitor.valid && (m_monitor_aligned.pc_wb != s_monitor.pc_wb))
+        |-> mismatch_detected;
+    endproperty
+    assert_pc_mismatch: assert property (p_pc_mismatch_triggers)
+        else $error("[SVA FAIL] PC divergence failed to flag mismatch_detected!");
+
+    // Property 4: Regfile Write Data Mismatch Detection
+    property p_reg_wdata_mismatch_triggers;
+        @(posedge clk) disable iff (!rst_n || !s_rst_n)
+        (m_monitor_aligned.valid && s_monitor.valid &&
+         m_monitor_aligned.wb_reg_we && s_monitor.wb_reg_we &&
+         (m_monitor_aligned.wb_reg_wdata != s_monitor.wb_reg_wdata))
+        |-> mismatch_detected;
+    endproperty
+    assert_reg_wdata_mismatch: assert property (p_reg_wdata_mismatch_triggers)
+        else $error("[SVA FAIL] Register file write data divergence failed to flag mismatch_detected!");
+
+endmodule
+
+//-----------------------------------------------------------------------------
+// SVA Checker 2: Top-Level Fail-Safe Isolation Clamp
+//-----------------------------------------------------------------------------
+module safety_island_top_sva (
+    input  logic clk_core,
+    input  logic rst_core_n,
+    input  logic safe_state_alarm_o,
+    input  logic can_tx,
+    input  logic safe_dmem_we
+);
+
+    // Property 5: Safe-State CAN TX clamp to Recessive (1'b1)
+    // Prevents babbling idiot failures on the automotive CAN network
+    property p_safe_state_tx_clamp;
+        @(posedge clk_core) disable iff (!rst_core_n)
+        safe_state_alarm_o |-> (can_tx == 1'b1);
+    endproperty
+    assert_safe_state_tx_clamp: assert property (p_safe_state_tx_clamp)
+        else $error("[SVA FAIL] CAN TX line not clamped recessive during safe_state_alarm!");
+    cover_safe_state_tx_clamp: cover property (p_safe_state_tx_clamp);
+
+    // Property 6: Safe-State Memory Write Inhibit
+    // Clamps all memory write enables to 0 during safe state
+    property p_safe_state_mem_write_inhibit;
+        @(posedge clk_core) disable iff (!rst_core_n)
+        safe_state_alarm_o |-> (safe_dmem_we == 1'b0);
+    endproperty
+    assert_safe_state_mem_write_inhibit: assert property (p_safe_state_mem_write_inhibit)
+        else $error("[SVA FAIL] Memory write occurred while in safe state!");
+
+endmodule
+
+//-----------------------------------------------------------------------------
+// SVA Checker 3: Clock Domain Crossing (CDC) Asynchronous FIFO Safety
+//-----------------------------------------------------------------------------
+module async_fifo_gray_sva #(
+    parameter int DATA_WIDTH = 32,
+    parameter int ADDR_WIDTH = 4
+)(
+    input  logic                  wclk,
+    input  logic                  wrst_n,
+    input  logic                  winc,
+    input  logic                  wfull,
+    input  logic [ADDR_WIDTH:0]   wbin_q,
+    input  logic [ADDR_WIDTH:0]   wbin_d,
+    input  logic [ADDR_WIDTH:0]   wptr_gray_q,
+    input  logic [ADDR_WIDTH:0]   wptr_gray_d,
+
+    input  logic                  rclk,
+    input  logic                  rrst_n,
+    input  logic                  rinc,
+    input  logic                  rempty,
+    input  logic [ADDR_WIDTH:0]   rbin_q,
+    input  logic [ADDR_WIDTH:0]   rbin_d,
+    input  logic [ADDR_WIDTH:0]   rptr_gray_q,
+    input  logic [ADDR_WIDTH:0]   rptr_gray_d
+);
+
+    // Property 7: No pointer advance when FIFO is full (Overflow Prevention)
+    property p_fifo_no_overflow;
+        @(posedge wclk) disable iff (!wrst_n)
+        (wfull && winc) |-> (wbin_d == wbin_q);
+    endproperty
+    assert_fifo_no_overflow: assert property (p_fifo_no_overflow)
+        else $error("[SVA FAIL] Write pointer advanced while FIFO was FULL!");
+
+    // Property 8: No pointer advance when FIFO is empty (Underflow Prevention)
+    property p_fifo_no_underflow;
+        @(posedge rclk) disable iff (!rrst_n)
+        (rempty && rinc) |-> (rbin_d == rbin_q);
+    endproperty
+    assert_fifo_no_underflow: assert property (p_fifo_no_underflow)
+        else $error("[SVA FAIL] Read pointer advanced while FIFO was EMPTY!");
+
+    // Property 9: Gray-Code 1-bit Hamming Distance on Write Pointer
+    // Every increment of the Gray pointer changes exactly ONE bit
+    property p_gray_code_write_hamming;
+        @(posedge wclk) disable iff (!wrst_n)
+        (winc && !wfull) |-> ($countones(wptr_gray_d ^ wptr_gray_q) == 1);
+    endproperty
+    assert_gray_code_write_hamming: assert property (p_gray_code_write_hamming)
+        else $error("[SVA FAIL] Write Gray pointer changed by more than 1 bit!");
+
+    // Property 10: Gray-Code 1-bit Hamming Distance on Read Pointer
+    property p_gray_code_read_hamming;
+        @(posedge rclk) disable iff (!rrst_n)
+        (rinc && !rempty) |-> ($countones(rptr_gray_d ^ rptr_gray_q) == 1);
+    endproperty
+    assert_gray_code_read_hamming: assert property (p_gray_code_read_hamming)
+        else $error("[SVA FAIL] Read Gray pointer changed by more than 1 bit!");
+
+endmodule
+
+//-----------------------------------------------------------------------------
+// Bind Directives for Formal Tools and Simulation
+//-----------------------------------------------------------------------------
+module dcls_assertions_bind;
+
+    bind dcls_comparator dcls_comparator_sva u_dcls_sva (
+        .clk               (clk),
+        .rst_n             (rst_n),
+        .s_rst_n           (s_rst_n),
+        .m_monitor_aligned (m_monitor_aligned),
+        .s_monitor         (s_monitor),
+        .mismatch_detected (mismatch_detected),
+        .safe_state_alarm  (safe_state_alarm),
+        .alarm_clear_n     (alarm_clear_n)
+    );
+
+    bind safety_island_top safety_island_top_sva u_top_sva (
+        .clk_core           (clk_core),
+        .rst_core_n         (rst_core_n),
+        .safe_state_alarm_o (safe_state_alarm_o),
+        .can_tx             (can_tx),
+        .safe_dmem_we       (safe_dmem_we)
+    );
+
+    bind async_fifo_gray async_fifo_gray_sva #(
+        .DATA_WIDTH (DATA_WIDTH),
+        .ADDR_WIDTH ($clog2(ADDR_DEPTH))
+    ) u_fifo_sva (
+        .wclk        (wclk),
+        .wrst_n      (wrst_n),
+        .winc        (winc),
+        .wfull       (wfull),
+        .wbin_q      (wbin_q),
+        .wbin_d      (wbin_d),
+        .wptr_gray_q (wptr_gray_q),
+        .wptr_gray_d (wptr_gray_d),
+        .rclk        (rclk),
+        .rrst_n      (rrst_n),
+        .rinc        (rinc),
+        .rempty      (rempty),
+        .rbin_q      (rbin_q),
+        .rbin_d      (rbin_d),
+        .rptr_gray_q (rptr_gray_q),
+        .rptr_gray_d (rptr_gray_d)
+    );
+
+endmodule
+
