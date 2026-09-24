@@ -1,4 +1,4 @@
-//=============================================================================
+ //=============================================================================
 // File: safety_island_top.sv
 // Description: Production-grade Dual-Core Lockstep (DCLS) Automotive Safety Island
 //              Top-Level SoC Integration.
