@@ -1,7 +1,7 @@
  //=============================================================================
  // File: safety_island_top.sv
  // Description: Production-grade Dual-Core Lockstep (DCLS) Automotive Safety Island
-//              Top-Level SoC Integration.
+ //              Top-Level SoC Integration.
 //              - Core Domain: 200 MHz Lockstep RISC-V RV32I (Master + Shadow)
 //              - Peripheral Domain: 40 MHz CAN-FD Controller
 //              - CDC Boundary: Gray-Code Dual-Clock Asynchronous FIFOs
